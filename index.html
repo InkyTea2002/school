@@ -1,0 +1,1189 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="utf-8">
+  <title>POLAR!</title>
+  <link rel="icon" type="image/x-icon" href="icon.png">
+  <style>
+    body {
+      margin: 0;
+      overflow: hidden;
+    }
+  </style>
+
+  <!-- Import P5.js -->
+  <script src="https://cdn.jsdelivr.net/gh/vExcess/library@main/p5.js"></script>
+</head>
+
+<body>
+  <script>
+    // Declan
+    // Jan 06 2024
+    /* This is a platformer game that uses polar coordinates
+    Polar coordinates has 2 axis there is rotation around the centre and distance to it
+    */
+
+    var view = [window.innerWidth, window.innerHeight];
+    var centreScreen = [view[0] / 2, view[1] / 2];
+    var viewOffset = [0, 0, 0];
+    var gameTime = 0;
+    var font;
+
+
+    // basic empty class to allow for drawing from the blit() function
+    class Drawable {
+      constructor(c, sc, st) {
+        this.colour = c;
+        this.strokeColour = sc;
+        this.strokeThickness = st;
+      }
+
+      blit() {
+        // each child overrides this function with custom drawing code
+      }
+    }
+
+    // Actors are non-static objects that can collide with colliders
+    class Actor extends Drawable {
+      constructor(size, c, sc, st, h, v) {
+        super(c, sc, st);
+        this.pos = [h, v]; // position
+        this.vel = [0, 0]; // velocity
+        this.size = size; // size
+        this.dot = 0; // the dot product of the ground normal
+        this.grounded = 4; // how long the actor has been on the ground for
+        this.groundNorm = [0, 0]; // the normal of the ground it's standing on
+        this.dead = false; // if its dead
+      }
+
+      // returns a value between 0-2PI
+      get position() {
+        return [(this.pos[0] < 0 ? TWO_PI - abs(this.pos[0]) % TWO_PI : this.pos[0] % TWO_PI), this.pos[1]];
+      }
+
+      move(delta) {
+        // All actors return a bool in move to see if they are being deleted or not
+        return false;
+      }
+
+      // generic drawing function that draws a circle at the actor's position
+      blit() {
+        var pos = p2s(this.pos);
+        push();
+        fill(this.colour);
+        stroke(this.strokeColour);
+        strokeWeight(this.strokeThickness);
+        circle(pos[0], pos[1], this.size * 2);
+        pop();
+      }
+    }
+
+    // an enum of the different movement behaviours for enemies
+    const behaviours = {
+      none: 0,
+      constant: 1
+    }
+
+    // stores data about enemy types
+    // size, behaviour, shape, health
+    const enemies = {
+      triguy: [20, "constant", "triangle", 3],
+      blockhead: [40, "none", "block", 5]
+    }
+
+    class Enemy extends Actor {
+
+      constructor(h, v, enemy, facing) { // pass in the position and the enemy type and the direction it faces
+        super(enemy[0], [255, 198, 66], [255, 0, 0], 3, h, v);
+        this.behaviour = behaviours[enemy[1]];
+        this.cooldown = 0;
+        this.shape = enemy[2];
+        this.facing = facing;
+        this.health = enemy[3];
+        this.lastHit = 0;
+      }
+
+      // uses the dot product and the behaviour type to determine how it moves
+      behave(dot) {
+        switch (this.behaviour) {
+          case behaviours.constant:
+            if (dot < 0.8) {this.facing *= -1;}
+            this.vel[0] = this.facing * 10;
+            break;
+          default:
+            break;
+        }
+
+      }
+      // draws different shapes depending on the enemy type
+      blit() {
+        push();
+        var pos = p2s(this.pos);
+        translate(pos[0], pos[1])
+        rotate(viewOffset[2] - this.pos[0]);
+        var damage = min((gameTime - this.lastHit) / 10, 1)
+        fill([255, 198 * damage, 66 * damage]);
+        stroke(this.strokeColour);
+        strokeWeight(this.strokeThickness);
+
+        beginShape();
+        switch (this.shape) {
+          case "triangle": // draws the triguy enemy
+            vertex(-this.size, this.size);
+            vertex(0, -this.size);
+            vertex(this.size, this.size);
+            endShape(CLOSE);
+            noStroke()
+            fill(255)
+            circle(0, this.size / 2, 15)
+            fill(0)
+            circle(this.facing * 3, this.size / 2, 10)
+            break;
+          case "block": // draws the blockhead enemy
+            vertex(this.size, this.size);
+            vertex(-this.size, this.size);
+            vertex(-this.size, -this.size);
+            vertex(this.size, -this.size);
+            endShape(CLOSE);
+            noStroke();
+            fill(255);
+            circle(0, 10, 35);
+            fill(0);
+            circle(this.facing * 10, 10, 15)
+            stroke(0);
+            noFill();
+            bezier(-30, -30, -20, -10, 20, -10, 30, -30)
+            break;
+          default:
+            break;
+        }
+
+
+        pop();
+      }
+
+      // moves the enemy
+      move(delta) {
+        // to see if the enemy is killed
+        if (this.health > 0) {
+          for (let actor of actors) {
+            if (actor instanceof Projectile) {
+              var d = pDist(this.position, actor.position);
+              if (d < this.size) {
+                this.health -= 1;
+                this.lastHit = gameTime;
+                actor.dead = true;
+              }
+            }
+          }
+        }
+
+        // checks to see if it is intersecting with the player
+        var d = pDist(this.position, player.position);
+        if (d < this.size + player.size && this.health > 0) {
+          if (this.shape == "triangle" && player.vel[1] < 0 && player.pos[1] > this.pos[1]) {
+            this.health = 0;
+            this.lastHit = gameTime;
+            player.vel[1] = 6;
+          }
+          else {
+            player.kill();
+          }
+        }
+
+        // to see if it dies
+        this.dead = this.dead || (this.health <= 0 && gameTime - this.lastHit > 10);
+        if (this.dead) {coins += 3;}
+
+        this.grounded += delta;
+        // loop through the colliders
+        var found = false;
+        for (let collider of colliders) {
+          var col = collider.overlapTest(this);
+          if (col[0]) {
+            found = true;
+            this.groundNorm = col[1];
+            break;
+          }
+        }
+        var dot = 1;
+        // if it is colliding
+        if (found) {
+          var pos = p2e(this.position);
+          this.grounded = 0;
+          pos = [pos[0] / this.pos[1], pos[1] / this.pos[1]]; // normalize
+          dot = acos(pos[0] * this.groundNorm[0] + pos[1] * this.groundNorm[1]);
+          dot = isNaN(dot) ? 1 : 1 - dot / PI;
+          dot = dot < 0.03 ? 0 : dot;
+          dot = dot > 0.98 ? 1 : dot;
+          this.dot = dot;
+          this.vel[1] = (1 - dot) * -3;
+          this.behave(dot);
+        }
+        else {
+          this.pos[1] += this.vel[1] * delta;
+          this.vel[1] -= 0.25 * delta;
+        }
+        this.pos[0] += this.vel[0] / (max(this.pos[1], 0.01) * 2 * PI) * delta;// * dot;
+        return this.dead;
+      }
+    }
+
+    // contains the different projectile types
+    // size, colour, stroke colour, stroke thickness, lifetime
+    const projectileData = {
+      fire: [3, [255, 20, 0], [255, 170, 0], 2, 6]
+    }
+
+    // special actor for projectiles
+    class Projectile extends Actor {
+      constructor(h, v, hd, vd, type) {  // takes in the position and starting velocity and the projectile type
+        super(projectileData[type][0], projectileData[type][1], projectileData[type][2], projectileData[type][3], h, v, hd, vd);
+        this.lifeTime = projectileData[type][4];
+        this.vel = [hd, vd];
+        this.gravity = 0.2;
+      }
+
+      // returns a value between 0-2PI
+      get position() {
+        return [(this.pos[0] < 0 ? TWO_PI - abs(this.pos[0]) % TWO_PI : this.pos[0] % TWO_PI), this.pos[1]];
+      }
+
+      // move the projectile
+      move(delta) {
+        // checks colliders
+        var found = false;
+        var pos = p2e([this.pos[0], 1]);
+        for (let collider of colliders) {
+          var col = collider.overlapTest(this);
+          if (col[0]) {
+            var dot = acos(pos[0] * col[1][0] + pos[1] * col[1][1]);
+            dot = isNaN(dot) ? 1 : 1 - dot / PI;
+            dot = dot < 0.03 ? 0 : dot;
+            dot = dot > 0.98 ? 1 : dot;
+            if (dot < 0.7) {
+              this.vel[0] *= -1;
+              this.lifeTime -= 1;
+            }
+            found = true;
+            if (this.vel[1] < 0) {
+              this.vel[1] = 3;
+              this.lifeTime -= 1;
+            }
+            break;
+          }
+        }
+        found = false;
+        this.pos[0] += this.vel[0] / (max(this.pos[1], 0.01) * 2 * PI) * delta;
+        this.pos[1] += this.vel[1] * delta;
+        this.vel[1] -= this.gravity * delta;
+        return found || this.lifeTime < 1 || this.dead;
+      }
+    }
+
+    // contains different power types and their data
+    const powerData = {
+      none: -1,
+      fire: 3,
+      cloud: 100,
+      shrink: 1,
+      grow: 1
+    }
+
+    // special actor for the player
+    class Player extends Actor {
+      constructor(h, v) {
+        super(10, [240, 240, 240], [0, 0, 0], 3, h, v, 0, 0);
+        this.impulses = [];
+        this.dot = 0;
+        this.facing = 1;
+        this.canJump = false;
+        this.cooldown = 1;
+        this.ammo = 0;
+        // none, fire, cloud, shrink, grow
+        this.setPower("none");
+        // dictates if the player's input is stopped
+        this.frozen = false;
+
+
+        viewOffset = [0, v, h + 3.141];
+      }
+
+      // kills the player and sets them back to the spawnpoint
+      kill() {
+        this.pos[0] = spawnPoint[0];
+        this.pos[1] = spawnPoint[1];
+        viewOffset = [0, this.pos[1], this.pos[0] + 3.141];
+        this.vel = [0, 0];
+        console.log("die");
+      }
+
+      // handles player input for moving
+      movement() {
+        if (keyIsDown(LEFT_ARROW)) {
+          this.vel[0] += (this.grounded < 5 ? 5 : 2.5) * deltaSeconds * this.dot;
+          this.facing = 1;
+        }
+
+        if (keyIsDown(RIGHT_ARROW)) {
+          this.vel[0] -= (this.grounded < 5 ? 5 : 2.5) * deltaSeconds * this.dot;
+          this.facing = -1;
+        }
+        if (keyIsDown(UP_ARROW) && this.canJump && lastJump < gameTime) {
+          lastJump = gameTime + 4;
+          if (this.form == "shrink" && this.size < 9) {
+            this.impulses.push(-0.5);
+          }
+          if (this.form == "grow" && this.size > 10) {
+            this.impulses.push(1);
+          }
+          this.impulses.push(6);
+          this.grounded = 100;
+          if (this.form == "cloud") {
+            this.cooldown = gameTime + 10;
+          }
+        }
+      }
+
+      // for the player using their powers
+      powerCheck() {
+
+        if (keyIsDown(88) && this.form != "none" && this.ammo >= 1) {
+          if (this.cooldown < gameTime && !actionHeld) {
+            if (this.form == "fire") {
+              this.cooldown = gameTime + 2;
+              this.ammo -= 1;
+              actors.push(new Projectile(this.position[0] + this.facing * 3 / max(this.pos[1], 0.01) * 2 * PI, this.pos[1], 30 * this.facing, 0, "fire"));
+            }
+            else if (this.form == "cloud" && !this.canJump) {
+              this.vel[1] = max(this.vel[1], -5);
+              this.ammo = 0;
+              colliders.push(new CloudPlatform(this.position[0] + (this.vel[0] / (this.pos[1] * PI)) * 2, this.pos[1] - 230, [255, 255, 255], 20, 200, 200));
+            }
+            else if (this.form == "shrink" && !actionHeld) {
+              var small = this.size == 5 ? 1 : 0;
+              this.size = 5 + 5 * small;
+              this.strokeThickness = 2 + 1 * small;
+              this.colour = small == 0 ? [20, 200, 255] : [255, 255, 255];
+              if (this.grounded < 1) {
+                this.pos[1] -= 6 - 13 * small;
+              }
+            }
+            else if (this.form == "grow" && !actionHeld) {
+              var big = this.size == 20 ? 1 : 0;
+              this.size = 20 - 10 * big;
+              this.strokeThickness = 5 - 2 * big;
+              this.colour = big == 0 ? [255, 200, 0] : [255, 255, 255];
+              if (this.grounded < 1) {
+                this.pos[1] += 12 - 24 * big;
+              }
+            }
+          }
+          actionHeld = true;
+        }
+        else {
+          actionHeld = false;
+        }
+      }
+
+      //sets the player's power
+      setPower(power) {
+        this.form = power;
+        this.ammo = powerData[power];
+      }
+
+      // draws the player
+      blit() {
+        var pos = p2s([this.pos[0], this.pos[1]]);
+        push();
+        fill(this.colour);
+        stroke(this.strokeColour);
+        strokeWeight(this.strokeThickness);
+        circle(pos[0], pos[1], this.size * 2);
+        pop();
+      }
+
+      // moves the player
+      move(delta) {
+        // this handles vertical impulses
+        if (this.impulses.length != 0) {
+          this.vel[1] = max(0, this.vel[1]);
+          for (let impulse of this.impulses) {
+            this.vel[1] += impulse;
+          }
+          this.pos[1] += this.vel[1];
+          this.impulses = [];
+        }
+
+        this.grounded += delta;
+        var found = false;
+        var c;
+        // loops through all the colliders
+        for (let collider of colliders) {
+          var col = collider.overlapTest(this);
+          if (col[0]) {
+            found = true;
+            c = collider;
+            this.groundNorm = col[1];
+
+            break;
+          }
+        }
+        // special power code
+        if (this.form == "cloud") {
+          this.ammo = min(100, this.ammo + delta * ((this.canJump && !(c instanceof CloudPlatform)) && c != undefined ? 2.5 : 0.1));
+        }
+        else if (this.form == "fire") {
+          this.ammo = min(3, this.ammo + delta * 0.01);
+        }
+        var dot = 1;
+        // if the player is colliding
+        if (found) {
+          var pos = p2e(this.position);
+          this.grounded = 0;
+          pos = [pos[0] / this.pos[1], pos[1] / this.pos[1]]; // normalize
+          dot = acos(pos[0] * this.groundNorm[0] + pos[1] * this.groundNorm[1]);
+          dot = isNaN(dot) ? 1 : 1 - dot / PI;
+          dot = dot < 0.03 ? 0 : dot;
+          dot = dot > 0.98 ? 1 : dot;
+          this.dot = dot;
+          this.vel[0] -= this.vel[0] * 0.1 * delta;
+          this.vel[1] = (1 - dot) * -3;
+          this.canJump = dot > 0.6;
+          if (dot < 0.7) {
+            dot = max(0, dot - 0.3);
+            var down = [-this.groundNorm[1], this.groundNorm[0]];
+            var dot2 = acos(pos[0] * down[0] + pos[1] * down[1]) / PI;
+            if (dot2 < 0.5) {
+              down = [-down[0], -down[1]];
+            }
+            pos[0] *= this.pos[1];
+            pos[1] *= this.pos[1]; // denormalize
+            pos[0] += down[0] * 400 * dot;
+            pos[1] += down[1] * 400 * dot;
+            var fin = [0, dist(pos[0], pos[1], 0, 0)]
+            fin[0] = acos(pos[1] / fin[1]);
+            if (pos[0] < 0) {
+              fin[0] = TWO_PI - fin[0];
+            }
+            fin[0] -= this.pos[0];
+            fin[1] -= this.pos[1];
+            fin[0] = fin[0] < 0.01 ? 0 : fin[0];
+            fin[1] = fin[1] < 0.01 ? 0 : fin[1];
+            this.vel[0] += fin[0] * delta;
+            this.vel[1] += fin[1] * delta * 10;
+            this.pos[1] += this.vel[1] * delta * (1 - dot);
+          }
+        }
+        else {
+          this.canJump = this.grounded < 10 && this.dot > 0.6;
+          this.pos[1] += this.vel[1] * delta;
+          this.vel[1] -= 0.025 * this.size * delta;
+        }
+        this.pos[0] += this.vel[0] / (max(this.pos[1], 0.01) * 2 * PI) * delta * dot;
+        this.vel[0] -= (this.vel[0] * 0.1) * delta;
+        return false;
+      }
+
+    }
+
+    class Collider extends Drawable {
+      constructor(h, v, c, sc, st) {
+        super(c, sc, st);
+        this.pos = [h, v];
+      }
+
+      overlapTest(actor) {
+        // All colliders return a bool in collide to see if they are being deleted or not
+        return [false];
+      }
+
+    }
+
+    class Spring extends Collider {
+      constructor(h, v, size, pw) {
+        super(h, v, 0, 0, 0);
+        this.size = size;
+        this.power = pw;
+        this.cooldown = 0;
+      }
+
+      // draws the sping
+      blit() {
+        var stretch = max(this.cooldown - gameTime, 0) / 1.5;
+        stretch = abs(stretch % 6 - 3) * stretch - stretch / 2 * -this.power * 0.01;
+        var pos = p2e([this.pos[0] - viewOffset[2], 1]); // normalized vector
+        var pos2 = [pos[0] * this.pos[1] + centreScreen[0] + viewOffset[0], pos[1] * this.pos[1] + centreScreen[1] + viewOffset[1]];
+        pos = [pos[0] * (this.pos[1] + 10 + stretch * 0.3) + centreScreen[0] + viewOffset[0], pos[1] * (this.pos[1] + 10 + stretch * 0.3) + centreScreen[1] + viewOffset[1]]
+        push();
+        strokeWeight(3);
+        strokeCap(SQUARE);
+        stroke(color(70, 70, 70));
+        line(pos[0], pos[1], pos2[0], pos2[1]);
+        stroke(color(255, 0, 0));
+        noFill();
+        var circumfrence = this.pos[1] * PI;
+        pos2 = -this.pos[0] + HALF_PI + viewOffset[2];
+        pos = [pos2 - this.size / circumfrence, pos2 + this.size / circumfrence];
+
+        arc(centreScreen[0] + viewOffset[0], centreScreen[1] + viewOffset[1], this.pos[1] * 2 + 20 + stretch * 0.6, this.pos[1] * 2 + 20 + stretch * 0.6, pos[0], pos[1]);
+
+        pop();
+      }
+
+      overlapTest(actor) {
+        // if it collides with the player than it launches them upward
+        if (actor.vel[1] < -0.5 && this.cooldown < gameTime && !actor.canJump) {
+          var dis = [abs((PI - abs(this.pos[0] + PI - actor.position[0]))) * max(this.pos[1], 0.01) * 2 * PI, abs(this.pos[1] + 20 - actor.pos[1])];
+          if (dis[0] < (this.size + actor.size) * 2 && dis[1] < 10) {
+            actor.impulses.push(this.power);
+            this.cooldown = gameTime + 60;
+          }
+        }
+        //always returns false so that actors dont stop looping through colliders
+        return [false];
+      }
+    }
+
+    // a collider that is made of an arc
+    class ArcCollider extends Collider {
+      constructor(h, v, sc, st, r, size, rot) {
+        super(h, v, 0, sc, st);
+        this.radius = r;
+        this.size = size;
+        this.rotation = rot;
+      }
+
+      //draws the arc
+      blit() {
+        var pos = p2s(this.pos);
+        push();
+        noFill();
+        stroke(this.strokeColour);
+        strokeWeight(this.strokeThickness);
+        strokeCap(ROUND);
+        var circumfrence = this.radius * 2 * PI;
+        arc(pos[0], pos[1], this.radius * 2, this.radius * 2, HALF_PI - this.pos[0] - this.size / circumfrence + viewOffset[2] + this.rotation, HALF_PI - this.pos[0] + this.size / circumfrence + viewOffset[2] + this.rotation)
+
+        pop();
+        return false;
+      }
+
+      // checks to see if an actor is touching it
+      overlapTest(actor) {
+        var pos1 = p2e(this.pos);
+        var pos2 = p2e(actor.position);
+        var oldLength = dist(pos2[0], pos2[1], 0, 0);
+        // this is distance
+        var d = sqrt(sq(pos1[0] - pos2[0]) + sq(pos1[1] - pos2[1]));
+
+        // get the angle to see if it is in the range
+        var rotated = p2e([this.pos[0] - this.rotation, 1])
+        var diff = [pos1[0] - pos2[0], pos1[1] - pos2[1]]; // from arc to actor
+        var diffdist = dist(diff[0], diff[1], 0, 0);
+        // add together the parts of each vector and divide by vector length
+        var dot = acos((diff[0] / -diffdist) * rotated[0] + (diff[1] / -diffdist) * rotated[1]);
+        //cut off point in radians 
+        var radianCut = (this.size + actor.size * 8 + this.strokeThickness) / (this.radius * 2 * PI);
+        // the radius of the ends of the arc
+        var endcapRadius = (this.strokeThickness * 4) / (this.radius * PI);
+        // the different of the distance to the arc's edge clamped between 0 and endcapradius then divide to its between 0-1
+        var mult = min(max(radianCut - dot, 0), endcapRadius) / endcapRadius;
+        // circle easing out function to align hitbox with visuals
+        mult = sqrt(1 - pow(mult - 1, 2));
+        // this is used because the thickness of the platform isnt the radius
+        var thickness = this.strokeThickness / 2 * mult;
+        // if the distance to the radius is less than the platform thickness
+        if (abs(d - this.radius) - actor.size - actor.strokeThickness < thickness && dot < radianCut) {
+
+          pos2 = [pos2[0] - pos1[0], pos2[1] - pos1[1]]; // unnorm difference vect
+          var newLength = dist(pos2[0], pos2[1], 0, 0); // unnorm vect length
+          var insideMult = 1;
+          // if inside the collider
+          if (d < this.radius) {
+            insideMult = -1;
+            d = this.radius - thickness - actor.size - actor.strokeThickness;
+          }
+          else {
+            d = this.radius + thickness + actor.size + actor.strokeThickness;
+          }
+
+          pos2 = [pos2[0] / newLength * d, pos2[1] / newLength * d]; // normalize
+          var tangent = pos2;
+          pos2 = [pos2[0] + pos1[0], pos2[1] + pos1[1]]; // add
+          newLength = dist(pos2[0], pos2[1], 0, 0);
+
+          dot = asin(pos2[0] / newLength); // normalized x inverse sin
+          if (pos2[1] < 0) { // why
+            dot = (dot < 0 ? (PI + dot) : (PI - dot));  // convert from absolute to full rotation
+          }
+          if (pos2[0] < 0) {
+            dot = (dot < 0 ? PI + dot : PI - dot) + PI;
+          }
+          var offset = [dot - actor.position[0], newLength - oldLength];
+          actor.pos[0] += offset[0];
+          actor.pos[1] += offset[1];
+          tangent = [tangent[0] / d * insideMult, tangent[1] / d * insideMult]; //normalize the normal
+
+          return [true, tangent];
+        }
+        return [false];
+      }
+    }
+
+    // a collider that can be jumped through from the bottom
+    class Platform extends Collider {
+      constructor(h, v, sc, st, r, size) {
+        super(h, v, 0, sc, st);
+        this.radius = r;
+        this.size = size;
+        if (this.size > this.radius * 2 * 3.141) {console.log("Size exceeds circumfrence!");}
+      }
+
+      // draws the platform
+      blit() {
+        var pos = p2s(this.pos);
+        push();
+        noFill();
+        stroke(this.strokeColour);
+        strokeWeight(this.strokeThickness);
+        strokeCap(PROJECT);
+        var circumfrence = this.radius * 2 * PI;
+        arc(pos[0], pos[1], this.radius * 2, this.radius * 2, HALF_PI - this.pos[0] - this.size / circumfrence + viewOffset[2], HALF_PI - this.pos[0] + this.size / circumfrence + viewOffset[2])
+        pop();
+        return false;
+      }
+
+      // tests to see if its touching an actor
+      overlapTest(actor) {
+        if (actor.vel[1] > 0.3) {
+          return [false];
+        }
+        var pos1 = p2e(this.pos);
+        var pos2 = p2e(actor.position);
+        var oldLength = dist(pos2[0], pos2[1], 0, 0);
+        var hd = abs((PI - abs(this.pos[0] + PI - actor.position[0]))) * (this.radius + this.pos[1]) * 2 * PI;
+        var d = actor.size + actor.strokeThickness + this.strokeThickness / 2 - 2;
+        var dis = dist(pos1[0], pos1[1], pos2[0], pos2[1]);
+        if (hd - d * 5 /* multiple by 5 is just for wider collison */ < this.size && abs(dis - this.radius - d) < 4 && player.pos[1] > this.pos[1] + this.radius) {
+
+          pos2 = [pos2[0] - pos1[0], pos2[1] - pos1[1]]; // unnorm difference vect
+          var newLength = dist(pos2[0], pos2[1], 0, 0); // unnorm vect length
+          d = this.radius + actor.size + actor.strokeThickness + this.strokeThickness / 2 - 2;
+          pos2 = [pos2[0] / newLength * d, pos2[1] / newLength * d]; // normalize
+          var tangent = pos2;
+          pos2 = [pos2[0] + pos1[0], pos2[1] + pos1[1]]; // add
+          newLength = dist(pos2[0], pos2[1], 0, 0);
+
+          var dot = asin(pos2[0] / newLength); // normalized x inverse sin
+          if (pos2[1] < 0) { // why
+            dot = (dot < 0 ? (PI + dot) : (PI - dot));  // convert from absolute to full rotation
+          }
+          if (pos2[0] < 0) {
+            dot = (dot < 0 ? PI + dot : PI - dot) + PI;
+          }
+          var offset = [dot - actor.position[0], newLength - oldLength];
+          actor.pos[0] += offset[0];
+          actor.pos[1] += offset[1];
+          tangent = [tangent[0] / d, tangent[1] / d]; //normalize the normal
+          return [true, tangent];
+        }
+        return [false];
+      }
+    }
+
+    // same as the platform but it shrinks overtime for the cloud power
+    class CloudPlatform extends Platform {
+      constructor(h, v, sc, st, r, size) {
+        super(h, v, sc, st, r, size);
+        this.pt = gameTime;
+        this.birthTime = gameTime + 14;
+      }
+
+      blit() {
+        if (this.birthTime - gameTime > 0) {
+          this.size = lerp(200, 0, (this.birthTime - gameTime) / 15);
+          this.strokeThickness = lerp(20, 0, (this.birthTime - gameTime) / 15);
+        }
+        else {
+          this.size -= gameTime - this.pt;
+          this.strokeThickness -= (gameTime - this.pt) * 0.1;
+          this.pt = gameTime;
+        }
+        super.blit()
+        return this.size <= 10;
+      }
+    }
+
+    // its like a platfrom but can only be stood on for a short time
+    class UnstablePlatform extends Platform {
+      constructor(h, v, sc, st, r, size) {
+        super(h, v, sc, st, r, size);
+        this.uses = 3;
+        this.baseColour = st;
+        this.cooldown = -100;
+      }
+
+      //slightly altered platform code
+      overlapTest(actor) {
+        if (this.uses <= 0) {
+          if (this.cooldown < gameTime) {
+            this.uses = 3;
+          }
+          return [false];
+        }
+        if (actor.vel[1] > 0.3) {
+          return [false];
+        }
+        var pos1 = p2e(this.pos);
+        var pos2 = p2e(actor.position);
+        var oldLength = dist(pos2[0], pos2[1], 0, 0);
+        var hd = abs((PI - abs(this.pos[0] + PI - actor.position[0]))) * (this.radius + this.pos[1]) * 2 * PI;
+        var d = actor.size + actor.strokeThickness + this.strokeThickness / 2 - 2;
+        var dis = dist(pos1[0], pos1[1], pos2[0], pos2[1]);
+        if (hd - d * 5 /* multiple by 5 is just for wider collison */ < this.size && abs(dis - this.radius - d) < 4 && player.pos[1] > this.pos[1] + this.radius) {
+
+          pos2 = [pos2[0] - pos1[0], pos2[1] - pos1[1]]; // unnorm difference vect
+          var newLength = dist(pos2[0], pos2[1], 0, 0); // unnorm vect length
+          d = this.radius + actor.size + actor.strokeThickness + this.strokeThickness / 2 - 2;
+          pos2 = [pos2[0] / newLength * d, pos2[1] / newLength * d]; // normalize
+          var tangent = pos2;
+          pos2 = [pos2[0] + pos1[0], pos2[1] + pos1[1]]; // add
+          newLength = dist(pos2[0], pos2[1], 0, 0);
+
+          var dot = asin(pos2[0] / newLength); // normalized x inverse sin
+          if (pos2[1] < 0) { // why
+            dot = (dot < 0 ? (PI + dot) : (PI - dot));  // convert from absolute to full rotation
+          }
+          if (pos2[0] < 0) {
+            dot = (dot < 0 ? PI + dot : PI - dot) + PI;
+          }
+          var offset = [dot - actor.position[0], newLength - oldLength];
+          actor.pos[0] += offset[0];
+          actor.pos[1] += offset[1];
+          tangent = [tangent[0] / d, tangent[1] / d]; //normalize the normal
+          if (this.cooldown < gameTime && actor.grounded > 0.5 && actor.vel[1] < 0) {
+            this.uses -= 1;
+            this.cooldown = gameTime + this.uses <= 0 ? 2 : 100;
+          }
+          return [true, tangent];
+        }
+        return [false];
+      }
+
+    }
+
+    class CircleCollider extends Collider {
+      constructor(h, v, c, sc, st, r) {
+        super(h, v, c, sc, st);
+        this.radius = r;
+      }
+      // test to see if an actor is colliding with it
+      overlapTest(actor) {
+        var pos1 = p2e(this.pos);
+        var pos2 = p2e(actor.position);
+        var oldPos = pos2;
+        var oldLength = dist(pos2[0], pos2[1], 0, 0);
+        var d = sqrt(sq(pos1[0] - pos2[0]) + sq(pos1[1] - pos2[1])) - actor.size - actor.strokeThickness;
+        if (d < this.radius) {
+          pos2 = [pos2[0] - pos1[0], pos2[1] - pos1[1]]; // unnorm difference vect
+          var newLength = dist(pos2[0], pos2[1], 0, 0); // unnorm vect length
+          d = this.radius + actor.size + actor.strokeThickness;
+          pos2 = [pos2[0] / newLength * d, pos2[1] / newLength * d]; // normalize
+          var tangent = pos2;
+          pos2 = [pos2[0] + pos1[0], pos2[1] + pos1[1]]; // add
+          newLength = dist(pos2[0], pos2[1], 0, 0);
+
+          var dot = asin(pos2[0] / newLength); // normalized x inverse sin
+          if (pos2[1] < 0) { // why
+            dot = (dot < 0 ? (PI + dot) : (PI - dot));  // convert from absolute to full rotation
+          }
+          if (pos2[0] < 0) {
+            dot = (dot < 0 ? PI + dot : PI - dot) + PI;
+          }
+          var offset = [dot - actor.position[0], newLength - oldLength];
+          actor.pos[0] += offset[0];
+          actor.pos[1] += offset[1];
+          tangent = [tangent[0] / d, tangent[1] / d]; //normalize the normal
+          return [true, tangent];
+        }
+        return [false];
+      }
+
+      // draws the collider
+      blit() {
+        var pos = p2s(this.pos);
+        push();
+        fill(this.colour);
+        stroke(this.strokeColour);
+        strokeWeight(this.strokeThickness);
+        circle(pos[0], pos[1], this.radius * 2);
+        pop();
+        return false;
+      }
+    }
+
+    // special collider that kills any actors that touch it
+    class BlackHole extends Collider {
+      constructor(h, v, r) {
+        super(h, v, [0, 0, 0], [30, 0, 30], 5);
+        this.radius = r;
+      }
+
+      // tests to see if an actor is touching it
+      overlapTest(actor) {
+        var pos1 = p2e(this.pos);
+        var pos2 = p2e(actor.position);
+        var oldLength = dist(pos2[0], pos2[1], 0, 0);
+        var d = sqrt(sq(pos1[0] - pos2[0]) + sq(pos1[1] - pos2[1])) - actor.size - actor.strokeThickness;
+        if (d < this.radius / 2) {
+          // if its a player respawn it
+          if (actor instanceof Player) {
+            player.kill();
+          }
+          // otherwise tell the actor to die
+          else {
+            actor.dead = true;
+          }
+        }
+        return [false];
+      }
+
+      // draws the blackhole
+      blit() {
+        var pos = p2s(this.pos);
+        push();
+        fill([38, 5, 13]);
+        stroke([166, 22, 12]);
+        strokeWeight(2);
+        translate(pos[0], pos[1])
+        rotate(viewOffset[2] + gameTime / 15);
+        for (let g = 0; g < 6; g++) {
+          var t = 10 - (gameTime / 4 + g * g) % 10;
+          //multiply by 45 degrees in radians to find x and y of each circle
+          var x = sin(1.04719755 * g) * this.radius / 5 * t;
+          var y = cos(1.04719755 * g) * this.radius / 5 * t;
+          circle(x, y, (10 - t) * 2)
+        }
+        rotate(gameTime / -30);
+        beginShape();
+        for (let i = 0; i < 24; i++) {
+          var m = (sin(gameTime / 10 + i) + 1) / 20 + 1 + (i % 3) / 10
+          //multiply by 15 degrees in radians to find x and y of each vertex
+          var x = sin(0.261799388 * i) * this.radius / 2 * m;
+          var y = cos(0.261799388 * i) * this.radius / 2 * m;
+          vertex(x, y);
+        }
+        endShape(CLOSE);
+
+        pop();
+        return false;
+      }
+    }
+
+    // its a coin
+    class Coin extends Collider {
+      constructor(h, v) {
+        super(h, v, 0, 0, 0);
+        this.collected = false;
+        this.cTime = 0;
+      }
+      overlapTest(actor) {
+        if (this.collected) {return [false];}
+        var pos1 = p2e(this.pos);
+        var pos2 = p2e(actor.position);
+        var dis = dist(pos1[0], pos1[1], pos2[0], pos2[1]);
+        if (dis < 30) {
+          this.collected = true;
+          this.cTime = gameTime;
+          coins += 1;
+        }
+        return [false];
+      }
+
+      blit() {
+        push();
+        var pos = p2s(this.pos);
+        var offset = this.collected ? gameTime - this.cTime : 0;
+        translate(pos[0], pos[1]);
+        rotate(viewOffset[2] - this.pos[0]);
+        fill([252, 211, 3, (20 - offset) / 20 * 255]);
+        stroke([252, 181, 3, (20 - offset) / 20 * 255])
+        strokeWeight(8);
+        ellipse(0, offset, sin(gameTime / 20 + ((offset / 2) + 1)) * 30, 30)
+        pop();
+        return this.collected && gameTime - this.cTime > 20;
+      }
+    }
+
+    // flag
+    class Flag extends Collider {
+      constructor(h, v, checkpoint) {
+        super(h, v, 0, 0, 0);
+        this.colour = checkpoint ? [255, 241, 112] : [186, 255, 112];
+        this.strokeColour = checkpoint ? [255, 226, 36] : [102, 222, 33];
+        this.checkpoint = checkpoint; // if false it becomes the level exit flag
+        this.collected = false;
+      }
+
+      // draws the flag
+      blit() {
+        push();
+        var pos = p2s(this.pos);
+        translate(pos[0], pos[1]);
+        rotate(viewOffset[2] - this.pos[0]);
+        fill(this.colour);
+        stroke(this.strokeColour);
+        strokeWeight(3)
+        beginShape();
+        vertex(15, 0);
+        vertex(-15, 0);
+        vertex(-15, 10);
+        vertex(-5, 10);
+        vertex(-5, 25);
+        vertex(-35, 40);
+        vertex(5, 55);
+        vertex(5, 10);
+        vertex(15, 10);
+        endShape(CLOSE)
+        pop();
+      }
+
+      // check to see if it collides with the player
+      overlapTest(actor) {
+        var dis = pDist(actor.pos, [this.pos[0], this.pos[1] + 15]);
+        if (dis < 30) {
+          if (this.checkpoint && !this.collected) {
+            spawnPoint[0] = this.pos[0];
+            spawnPoint[1] = this.pos[1];
+            this.strokeColour = [255, 167, 36];
+            this.colour = [255, 186, 97];
+            this.collected = true;
+          }
+          else if (!this.checkpoint) {
+            level += 1;
+            load = true;
+          }
+        }
+      }
+    }
+
+    // draws text to a point in the world
+    class Text extends Drawable {
+      constructor(h, v, msg, size) {
+        super(0, 0, size);
+        this.pos = [h, v];
+        this.message = msg;
+      }
+
+      blit() {
+        push();
+        var pos = p2s(this.pos);
+        translate(pos[0], pos[1]);
+        rotate(viewOffset[2] - this.pos[0] + PI);
+        textFont(font)
+        textSize(this.strokeThickness);
+        noStroke();
+        fill(this.colour);
+        text(this.message, this.message.length * this.strokeThickness / -6, 0);
+        pop();
+      }
+    }
+    // converts polar to screen
+    function p2s(polar) {
+      return [sin(polar[0] - viewOffset[2]) * polar[1] + centreScreen[0] + viewOffset[0], cos(polar[0] - viewOffset[2]) * polar[1] + centreScreen[1] + viewOffset[1]];
+    }
+    // converts polar to euclidian
+    function p2e(polar) {
+      return [sin(polar[0]) * polar[1], cos(polar[0]) * polar[1]];
+    }
+
+    // get distance without needing to convert to euclidian using the law of cosines
+    function pDist(pos1, pos2) {
+      var c = pos1[1] * pos1[1] + pos2[1] * pos2[1];
+      c -= 2 * pos1[1] * pos2[1] * cos(abs(pos1[0] - pos2[0]));
+      return sqrt(c);
+    }
+
+    // level independant variables
+    var player = new Player(0, 330);
+    var coins = 0;
+    var spawnPoint = [3.141, 400]
+    var deaths = 0;
+    var level = 0;
+
+    // arrays of each different class type
+    var decals = [new Text(0, 250, "You did it!", 30), new Text(0, 200, "That's it...", 30)];
+    var actors = [];
+    var colliders = [new CircleCollider(0, 0, 0, 0, 1, 100)];
+    var playerOnlyColliders = [];
+    // contains level info
+    class Level {
+      constructor(sPos, form, d, a, c, poc) {
+        this.table = {playerPos: sPos, playerForm: form, decals: d, actors: a, colliders: c, playerOnlyColliders: poc}
+      }
+
+      // loads level info
+      load() {
+        decals = this.table.decals;
+        actors = this.table.actors;
+        colliders = this.table.colliders;
+        playerOnlyColliders = this.table.playerOnlyColliders;
+        player.pos = this.table.playerPos;
+        spawnPoint[0] = this.table.playerPos[0];
+        spawnPoint[1] = this.table.playerPos[1];
+        player.setPower(this.table.playerForm);
+      }
+    }
+
+    // the first level
+    var level0 = new Level([3.141, 900], "none",
+      [new Text(3.141, 900, "Use the arrow keys to move", 30), new Text(2.8, 850, "This world isn't normal, it's POLAR!", 30), new Text(2.4, 800, "In each level you must find the green flag", 30), new Text(2, 750, "Following coins is a good start", 30)],
+      [],
+      [new CircleCollider(0, 0, [0, 0, 0, 0], [180, 0, 255], 10, 80), new ArcCollider(0, 0, [0, 0, 240], 10, 160, 2800, 0), new ArcCollider(0, 0, [0, 255, 0], 10, 220, 4000, 1.5), new ArcCollider(0, 0, [255, 230, 0], 10, 280, 5200, 5.3), new ArcCollider(0, 0, [255, 130, 0], 10, 340, 6400, 3), new ArcCollider(0, 0, [255, 0, 0], 50, 640, 9400, 3), new BlackHole(0, 0, 50)],
+      [new Coin(3.141, 150), new Coin(1.64, 240), new Coin(4.1, 300), new Coin(0.14, 360), new Coin(1.9, 700), new Coin(1.7, 700), new Coin(1.5, 700), new Coin(1.3, 700), new Coin(1.1, 700), new Coin(0.8, 600), new Flag(0, 80, false)])
+
+    var level1 = new Level([0, 330], "none",
+      [new Text(0, 480, "Jump, if you fall that's okay", 30), new Text(0, 430, "you'll land back here", 30), new Text(0, 380, "because the world is POLAR!", 30), new Text(5, 700, "Jump on springs to go flying", 30), new Text(4.5, 950, "Yellow flags are checkpoints", 30), new Text(4.5, 900, "Press < R > to come back to it", 30), new Text(2.6, 970, "Beware, blackholes kill you", 30)],
+      [],
+      [new CircleCollider(0, 0, [140, 100, 50], [136, 212, 55], 7, 300), new ArcCollider(5.6, 0, [136, 212, 55], 20, 360, 600, 0), new ArcCollider(5.3, 0, [136, 212, 55], 20, 440, 600, 0), new ArcCollider(5.88, 80, [136, 212, 55], 20, 440, 600, 0), new ArcCollider(5.1, 0, [136, 212, 55], 20, 600, 1600, 0), new ArcCollider(4.4, 0, [136, 212, 55], 20, 800, 1000, 0), new ArcCollider(4.05, 0, [136, 212, 55], 20, 800, 100, 0), new ArcCollider(3.85, 0, [136, 212, 55], 20, 800, 100, 0), new ArcCollider(3.65, 0, [136, 212, 55], 20, 820, 40, 0), new ArcCollider(3.2, 0, [136, 212, 55], 20, 900, 200, 0), new ArcCollider(2.6, 0, [136, 212, 55], 20, 900, 200, 0), new ArcCollider(2.31, 0, [136, 212, 55], 20, 800, 200, 0), new BlackHole(2.45, 890, 100)],
+      [new Spring(4.7, 610, 40, 10), new Flag(4.5, 810, true), new Spring(3.4, 730, 40, 10), new Flag(3.2, 910, true), new Spring(2.9, 730, 40, 11), new Coin(2.6, 930), new Coin(5.45, 480), new Coin(5.75, 560), new Coin(5.5, 640), new Coin(4.7, 750), new Coin(4.05, 840), new Coin(3.85, 840), new Coin(3.65, 860), new Flag(2.31, 810, false)])
+    var endLevel = new Level([0, 330], "none",
+      [new Text(0, 250, "You did it!", 30), new Text(0, 200, "That's it...", 30)],
+      [],
+      [new CircleCollider(0, 0, 0, 0, 1, 100)],
+      [])
+
+    // an array of all the levels
+    var levels = [level0, level1, endLevel]
+
+    // timing based variables
+    var deltaSeconds;
+    var lastJump = 0;
+    var load = false;
+
+    // to see if a button is being held down
+    var actionHeld;
+
+    // loads a level
+    function loadLevel() {
+      levels[level].load();
+      player.kill();
+      deaths -= 1;
+    }
+
+    // draws the coin and power GUI
+    function drawGUI() {
+      push();
+
+      fill([252, 211, 3]);
+      stroke([252, 181, 3])
+      strokeWeight(8);
+      ellipse(35, 40, 40, 40)
+
+      textFont(font);
+      noStroke();
+      fill(0)
+      textSize(50)
+      text("x" + coins, 62, 60)
+
+      if (player.form == "fire") {
+        noFill();
+        stroke(255, 170, 0);
+        strokeWeight(10);
+        arc(100, view[1] - 100, 100, 100, 0, TWO_PI * (player.ammo / 3))
+      }
+      else if (player.form == "cloud") {
+        noFill();
+        stroke(player.ammo * 1.275 + 127.5);
+        strokeWeight(10);
+        arc(100, view[1] - 100, 100, 100, 0, TWO_PI * (player.ammo / 100))
+        //strokeCap(SQUARE);
+        //for (var i = 0; i < player.ammo; i++) {
+        //arc(100,view[1] - 100,50,50,2.094 * i - 0.175,2.094 * (i+1)- 0.873);
+        //}
+      }
+      pop();
+    }
+
+    // loads the font
+    function preload() {
+      font = loadFont("oswald.ttf");
+    }
+
+    // makes the canvas and loads the level
+    function setup() {
+      createCanvas(view[0], view[1]);
+      loadLevel();
+    }
+
+    // main loop
+    function draw() {
+      // delta seconds is time between each draw
+      deltaSeconds = min(deltaTime * 0.05, 3);
+      // total time passed
+      gameTime += deltaSeconds;
+      // for rotating the camera
+      var pos = p2e(player.pos);
+      viewOffset[1] = lerp(viewOffset[1], player.pos[1], 0.1);
+      viewOffset[2] = lerp(viewOffset[2], player.pos[0] + PI, 0.1);
+      background(186, 255, 255);
+      // draw and collide colliders
+      var next = [];
+      for (let collider of colliders) {
+        if (!collider.blit()) {
+          next.push(collider);
+        }
+      }
+      // keeps any nondead colliders
+      colliders = next;
+      // repeat for player only colliders like springs and coins
+      next = [];
+      for (let collider of playerOnlyColliders) {
+        collider.overlapTest(player);
+        if (!collider.blit()) {
+          next.push(collider);
+        }
+      }
+      // keeps any nondead colliders
+      playerOnlyColliders = next;
+
+      // draws all the text
+      for (let decal of decals) {
+        decal.blit();
+      }
+      next = [];
+      // draw & move actors
+      for (let act = 0; act < actors.length; act++) {
+        actors[act].blit();
+        if (!actors[act].move(deltaSeconds) && !actors[act].dead) {
+          next.push(actors[act])
+        }
+      }
+      // keeps any nondead actors
+      actors = next;
+      //moves and draws the player
+      player.blit();
+      player.move(deltaSeconds);
+      player.powerCheck();
+      player.movement();
+
+      // draws the GUI
+      drawGUI();
+
+      // if the player is pressing R
+      if (keyIsDown(82)) {
+        player.kill()
+        deaths -= 1;
+      }
+      if (load) {
+        loadLevel();
+        load = false;
+      }
+
+    }
+  </script>
+</body>
+
+</html>
